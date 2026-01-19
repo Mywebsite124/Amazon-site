@@ -141,11 +141,11 @@ const ImageZoom = ({ src }: { src: string }) => {
 };
 
 const ProductDetail = ({ product, allProducts, addToCart, goBack, onProductSelect }: any) => {
-  const [activeImage, setActiveImage] = useState(product.images[0]);
+  const [activeImage, setActiveImage] = useState(product.images?.[0] || '');
   
   const averageRating = useMemo(() => {
-    if (!product.customerReviews || product.customerReviews.length === 0) return product.rating;
-    return product.customerReviews.reduce((acc: number, r: any) => acc + r.rating, 0) / product.customerReviews.length;
+    if (!product.customerReviews || product.customerReviews.length === 0) return product.rating || 4.5;
+    return product.customerReviews.reduce((acc: number, r: any) => acc + Number(r.rating), 0) / product.customerReviews.length;
   }, [product.customerReviews, product.rating]);
 
   return (
@@ -285,7 +285,7 @@ const AdminPanel = ({
     <div className="min-h-screen bg-gray-100 pb-12">
       <div className="bg-[#232f3e] text-white p-4 flex justify-between items-center sticky top-0 z-50 shadow-md">
         <div className="flex items-center gap-8">
-          <h1 className="text-xl font-bold flex items-center gap-2"><Settings size={22} /> Amazon Store Admin</h1>
+          <h1 className="text-xl font-bold flex items-center gap-2 cursor-pointer" onClick={() => window.location.reload()}><Settings size={22} /> Amazon Store Admin</h1>
           <div className="flex gap-4">
             <button onClick={() => setActiveTab('products')} className={`px-4 py-1 rounded-full text-sm font-medium transition-all ${activeTab === 'products' ? 'bg-white text-black' : 'hover:bg-white/10'}`}>Products</button>
             <button onClick={() => setActiveTab('home')} className={`px-4 py-1 rounded-full text-sm font-medium transition-all ${activeTab === 'home' ? 'bg-white text-black' : 'hover:bg-white/10'}`}>Home Assets</button>
@@ -403,7 +403,7 @@ const AdminPanel = ({
                     </section>
 
                     <section className="space-y-4">
-                      <h4 className="font-black text-xs text-gray-400 uppercase tracking-widest border-b pb-2">Image Assets</h4>
+                      <h4 className="font-black text-xs text-gray-400 uppercase tracking-widest border-b pb-2">Image Assets (Newline separated)</h4>
                       <textarea className="w-full p-3 border-2 border-gray-100 rounded-xl h-32 font-mono text-xs focus:border-blue-500 outline-none text-[#0f1111]" value={editingProduct.images?.join('\n')} onChange={e => setEditingProduct({...editingProduct, images: e.target.value.split('\n')})} />
                     </section>
 
@@ -606,35 +606,59 @@ export default function AmazonClone() {
   const onProductSelect = (p: Product) => { setSelectedProduct(p); setView('detail'); window.scrollTo(0,0); };
 
   const onSaveProduct = async (p: any) => {
-    const { customerReviews, reviews, ...productToSave } = p;
-    let productId = p.id;
-    if (p.id !== 0) {
-      await supabase.from('products').update(productToSave).eq('id', p.id);
+    // Crucial: Separate ID and reviews from the main object to save
+    const { id, customerReviews, reviews, ...productData } = p;
+    
+    let productId = id;
+    
+    if (id !== 0) {
+      // Update existing
+      const { error: updateError } = await supabase.from('products').update(productData).eq('id', id);
+      if (updateError) {
+          console.error("Update Error:", updateError);
+          alert("Error updating product");
+          return;
+      }
     } else {
-      const { data, error } = await supabase.from('products').insert([productToSave]).select();
-      if (!error) productId = data[0].id;
+      // Create new - SUPABASE WILL GENERATE THE ID
+      const { data: insertData, error: insertError } = await supabase.from('products').insert([productData]).select();
+      if (insertError) {
+          console.error("Insert Error:", insertError);
+          alert("Error creating product");
+          return;
+      }
+      productId = insertData[0].id;
     }
 
+    // Save Reviews if any
     if (productId && customerReviews) {
+        // Simple strategy: replace all reviews for this product
         await supabase.from('reviews').delete().eq('product_id', productId);
         const reviewsToInsert = customerReviews.map((r: any) => ({
             product_id: productId,
-            user_name: r.user_name,
-            rating: r.rating,
-            comment: r.comment,
-            date: r.date,
-            images: r.images
-        }));
+            user_name: r.user_name || 'Amazon Customer',
+            rating: Number(r.rating) || 5,
+            comment: r.comment || '',
+            date: r.date || new Date().toLocaleDateString(),
+            images: r.images || []
+        })).filter((r: any) => r.comment.trim() !== '');
+        
         if (reviewsToInsert.length > 0) {
             await supabase.from('reviews').insert(reviewsToInsert);
         }
     }
-    fetchData();
+
+    // Final refresh
+    await fetchData();
   };
 
   const onDeleteProduct = async (id: number) => {
     if (window.confirm("Are you sure you want to delete this product?")) {
-        await supabase.from('products').delete().eq('id', id);
+        const { error } = await supabase.from('products').delete().eq('id', id);
+        if (error) {
+            console.error("Delete error:", error);
+            alert("Could not delete product");
+        }
         fetchData();
     }
   };
@@ -724,28 +748,34 @@ export default function AmazonClone() {
                </div>
 
                {/* Products Section */}
-               <div className="bg-white p-6 shadow-lg">
-                  <h2 className="text-2xl font-bold mb-6 border-b pb-4">Featured Products</h2>
+               <div className="bg-white p-6 shadow-lg rounded-sm min-h-[400px]">
+                  <h2 className="text-2xl font-bold mb-6 border-b pb-4 text-[#0f1111]">Featured Products</h2>
                   <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
                     {filteredProducts.length === 0 ? (
-                      <div className="col-span-full py-12 text-center text-gray-500">No products found matching "{searchTerm}"</div>
+                      <div className="col-span-full py-24 text-center">
+                          <p className="text-gray-500 text-lg mb-4">No products available yet.</p>
+                          <button onClick={() => setView('login')} className="bg-[#ffd814] px-6 py-2 rounded-lg font-medium border border-[#fcd200]">Add your first product</button>
+                      </div>
                     ) : (
                       filteredProducts.map(p => (
-                        <div key={p.id} className="cursor-pointer hover:shadow-xl transition-all border p-4 rounded-sm bg-white flex flex-col" onClick={() => onProductSelect(p)}>
-                           <div className="h-48 w-full flex items-center justify-center mb-4 p-2">
-                            <img src={p.images?.[0] || ''} className="max-h-full max-w-full object-contain" onError={handleImageError} />
+                        <div key={p.id} className="cursor-pointer hover:shadow-xl transition-all border p-4 rounded-sm bg-white flex flex-col group" onClick={() => onProductSelect(p)}>
+                           <div className="h-48 w-full flex items-center justify-center mb-4 p-2 overflow-hidden">
+                            <img src={p.images?.[0] || ''} className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform" onError={handleImageError} />
                            </div>
-                           <h3 className="text-sm font-medium line-clamp-2 mb-2 leading-snug h-10">{p.title}</h3>
+                           <h3 className="text-sm font-medium line-clamp-2 mb-2 leading-snug h-10 text-[#007185] group-hover:text-[#c45500] group-hover:underline">{p.title}</h3>
                            <div className="flex text-[#ffa41c] mb-1 items-center">
-                             {[...Array(5)].map((_, i) => <Star key={i} size={14} fill={i < Math.floor(p.rating) ? "currentColor" : "none"} />)}
+                             {[...Array(5)].map((_, i) => <Star key={i} size={14} fill={i < Math.floor(p.rating || 4.5) ? "currentColor" : "none"} />)}
                              <span className="text-xs text-blue-600 ml-2 font-medium">{p.customerReviews?.length || 0}</span>
                            </div>
                            <div className="mt-auto pt-2">
-                            <p className="text-2xl font-bold text-[#0f1111] tracking-tight">
-                              <span className="text-sm align-top mr-0.5 mt-1">$</span>{Math.floor(Number(p.price))}
-                              <span className="text-sm align-top">{(Number(p.price) % 1).toFixed(2).substring(2)}</span>
-                            </p>
-                            <p className="text-xs text-gray-500 mt-1">Get it as soon as Tomorrow</p>
+                            <div className="flex items-start">
+                                <span className="text-xs font-bold mt-1">$</span>
+                                <p className="text-2xl font-bold text-[#0f1111] tracking-tight ml-0.5">
+                                  {Math.floor(Number(p.price))}
+                                  <span className="text-xs align-top">{(Number(p.price) % 1).toFixed(2).substring(2)}</span>
+                                </p>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">FREE delivery <span className="font-bold">Tomorrow</span></p>
                            </div>
                         </div>
                       ))
